@@ -8,111 +8,94 @@ const {
   ChannelType,
   ComponentType,
 } = require('discord.js');
-const { salvarConfiguracaoServidor, salvarCanaisTimes } = require('../banco/db');
+const { salvarConfiguracaoServidor, salvarCanaisTimes, buscarOuCriarConfigServidor } = require('../banco/db');
 
 const TEMPO_LIMITE_MS = 5 * 60 * 1000;
+const COR_EMBED = 0x5865f2;
 
-const OPCOES_PERMISSAO = [
+const OPCOES_INICIAR = [
   { id: 'dono', rotulo: 'Dono' },
   { id: 'admins', rotulo: 'Admins' },
   { id: 'todos', rotulo: 'Todos' },
 ];
 
-function linhaBotoesPermissao(customIdPrefixo) {
-  return new ActionRowBuilder().addComponents(
-    OPCOES_PERMISSAO.map((opcao) =>
-      new ButtonBuilder()
-        .setCustomId(`${customIdPrefixo}_${opcao.id}`)
-        .setLabel(opcao.rotulo)
-        .setStyle(ButtonStyle.Primary)
-    )
+function embedIniciar() {
+  return new EmbedBuilder()
+    .setTitle('1/5 - Quem pode iniciar um !mix?')
+    .setDescription('Marque quantas opções quiser, depois clique em Confirmar.')
+    .setColor(COR_EMBED);
+}
+
+function linhaTogglesIniciar(selecionados) {
+  const botoes = OPCOES_INICIAR.map((opcao) =>
+    new ButtonBuilder()
+      .setCustomId(`configurar_iniciar_${opcao.id}`)
+      .setLabel(selecionados.has(opcao.id) ? `✅ ${opcao.rotulo}` : opcao.rotulo)
+      .setStyle(selecionados.has(opcao.id) ? ButtonStyle.Success : ButtonStyle.Secondary)
   );
+
+  const confirmar = new ButtonBuilder()
+    .setCustomId('configurar_iniciar_confirmar')
+    .setLabel('✅ Confirmar')
+    .setStyle(ButtonStyle.Primary)
+    .setDisabled(selecionados.size === 0);
+
+  return [new ActionRowBuilder().addComponents(...botoes, confirmar)];
 }
 
-async function perguntarPermissao(message, titulo, customIdPrefixo) {
-  const embed = new EmbedBuilder().setTitle(titulo).setColor(0x5865f2);
-
-  const mensagem = await message.channel.send({
-    embeds: [embed],
-    components: [linhaBotoesPermissao(customIdPrefixo)],
-  });
-
-  const interacao = await mensagem.awaitMessageComponent({
-    filter: (i) => i.user.id === message.author.id,
-    componentType: ComponentType.Button,
-    time: TEMPO_LIMITE_MS,
-  });
-
-  const escolha = interacao.customId.slice(customIdPrefixo.length + 1);
-  const opcaoEscolhida = OPCOES_PERMISSAO.find((o) => o.id === escolha);
-
-  await interacao.update({
-    embeds: [embed.setFooter({ text: `Escolhido: ${opcaoEscolhida.rotulo}` })],
-    components: [],
-  });
-
-  return escolha;
+function embedGerenciar() {
+  return new EmbedBuilder()
+    .setTitle('2/5 - Quem mais pode aprovar/trocar times/mexer nas salas de voz?')
+    .setDescription(
+      'O dono e os admins do servidor sempre podem gerenciar qualquer mix, além de quem criou aquela sessão específica. Escolha se mais alguém também pode:'
+    )
+    .setColor(COR_EMBED);
 }
 
-async function perguntarCargoAdmin(message) {
-  const embed = new EmbedBuilder()
-    .setTitle('3/5 - Qual cargo representa os admins do seu servidor?')
-    .setColor(0x5865f2);
-
-  const menu = new RoleSelectMenuBuilder()
-    .setCustomId('configurar_cargo_admin')
-    .setMinValues(1)
-    .setMaxValues(1);
-
-  const mensagem = await message.channel.send({
-    embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(menu)],
-  });
-
-  const interacao = await mensagem.awaitMessageComponent({
-    filter: (i) => i.user.id === message.author.id,
-    componentType: ComponentType.RoleSelect,
-    time: TEMPO_LIMITE_MS,
-  });
-
-  const cargoId = interacao.values[0];
-
-  await interacao.update({
-    embeds: [embed.setFooter({ text: `Escolhido: cargo selecionado` })],
-    components: [],
-  });
-
-  return cargoId;
+function linhaBotoesGerenciar() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('configurar_gerenciar_criador')
+        .setLabel('Só o criador do mix')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('configurar_gerenciar_todos').setLabel('Todos').setStyle(ButtonStyle.Primary)
+    ),
+  ];
 }
 
-async function perguntarCanalVoz(message, titulo, customId) {
-  const embed = new EmbedBuilder().setTitle(titulo).setColor(0x5865f2);
+function embedCargoAdmin() {
+  return new EmbedBuilder().setTitle('3/5 - Qual cargo representa os admins do seu servidor?').setColor(COR_EMBED);
+}
 
+function linhaRoleSelect(cargoAtualId) {
+  const menu = new RoleSelectMenuBuilder().setCustomId('configurar_cargo_admin').setMinValues(1).setMaxValues(1);
+  if (cargoAtualId) menu.setDefaultRoles(cargoAtualId);
+  return [new ActionRowBuilder().addComponents(menu)];
+}
+
+function embedCanal(numero, rotulo) {
+  return new EmbedBuilder().setTitle(`${numero}/5 - Qual sala de voz é o ${rotulo}?`).setColor(COR_EMBED);
+}
+
+function linhaChannelSelect(customId, canalAtualId) {
   const menu = new ChannelSelectMenuBuilder()
     .setCustomId(customId)
     .setChannelTypes(ChannelType.GuildVoice)
     .setMinValues(1)
     .setMaxValues(1);
+  if (canalAtualId) menu.setDefaultChannels(canalAtualId);
+  return [new ActionRowBuilder().addComponents(menu)];
+}
 
-  const mensagem = await message.channel.send({
-    embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(menu)],
-  });
+function embedConcluido() {
+  return new EmbedBuilder().setTitle('✅ Configuração salva com sucesso!').setColor(0x2ecc71);
+}
 
-  const interacao = await mensagem.awaitMessageComponent({
-    filter: (i) => i.user.id === message.author.id,
-    componentType: ComponentType.ChannelSelect,
-    time: TEMPO_LIMITE_MS,
-  });
-
-  const canalId = interacao.values[0];
-
-  await interacao.update({
-    embeds: [embed.setFooter({ text: `Escolhido: canal selecionado` })],
-    components: [],
-  });
-
-  return canalId;
+function embedTempoEsgotado() {
+  return new EmbedBuilder()
+    .setTitle('⏱️ Tempo esgotado. Rode `!configurar` de novo quando quiser.')
+    .setColor(0xe74c3c);
 }
 
 module.exports = {
@@ -123,28 +106,93 @@ module.exports = {
       return message.reply('🚫 Apenas o dono do servidor pode rodar `!configurar`.');
     }
 
+    const configAtual = await buscarOuCriarConfigServidor(message.guild.id);
+
+    // Todo o assistente roda numa única mensagem: cada resposta EDITA essa
+    // mesma mensagem (via interacao.update()) em vez de mandar uma nova.
+    const mensagem = await message.channel.send({
+      embeds: [embedIniciar()],
+      components: linhaTogglesIniciar(new Set()),
+    });
+
     try {
-      const quemPodeIniciarMix = await perguntarPermissao(
-        message,
-        '1/5 - Quem pode iniciar um !mix?',
-        'configurar_iniciar'
-      );
-      const quemPodeGerenciarMix = await perguntarPermissao(
-        message,
-        '2/5 - Quem pode aprovar/trocar times/mexer nas salas de voz?',
-        'configurar_gerenciar'
-      );
-      const cargoAdminId = await perguntarCargoAdmin(message);
-      const canalTimeAId = await perguntarCanalVoz(
-        message,
-        '4/5 - Qual sala de voz é o Time A?',
-        'configurar_canal_a'
-      );
-      const canalTimeBId = await perguntarCanalVoz(
-        message,
-        '5/5 - Qual sala de voz é o Time B?',
-        'configurar_canal_b'
-      );
+      // 1/5 - quem pode iniciar (múltipla escolha, com toggles + confirmar)
+      const selecionados = new Set();
+      let interacao;
+
+      while (true) {
+        interacao = await mensagem.awaitMessageComponent({
+          filter: (i) => i.user.id === message.author.id,
+          componentType: ComponentType.Button,
+          time: TEMPO_LIMITE_MS,
+        });
+
+        if (interacao.customId === 'configurar_iniciar_confirmar') break;
+
+        const opcaoId = interacao.customId.replace('configurar_iniciar_', '');
+        if (selecionados.has(opcaoId)) {
+          selecionados.delete(opcaoId);
+        } else {
+          selecionados.add(opcaoId);
+        }
+
+        await interacao.update({ embeds: [embedIniciar()], components: linhaTogglesIniciar(selecionados) });
+      }
+
+      const quemPodeIniciarMix = [...selecionados];
+
+      // 2/5 - quem mais pode gerenciar (dono/admins já são sempre garantidos)
+      await interacao.update({ embeds: [embedGerenciar()], components: linhaBotoesGerenciar() });
+
+      interacao = await mensagem.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id,
+        componentType: ComponentType.Button,
+        time: TEMPO_LIMITE_MS,
+      });
+
+      const quemPodeGerenciarMix = interacao.customId === 'configurar_gerenciar_todos' ? 'todos' : 'criador';
+
+      // 3/5 - cargo admin, pré-selecionado se já houver um (ex: criado no guildCreate)
+      await interacao.update({
+        embeds: [embedCargoAdmin()],
+        components: linhaRoleSelect(configAtual?.cargo_admin_id),
+      });
+
+      interacao = await mensagem.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id,
+        componentType: ComponentType.RoleSelect,
+        time: TEMPO_LIMITE_MS,
+      });
+
+      const cargoAdminId = interacao.values[0];
+
+      // 4/5 - canal Time A, pré-selecionado se já houver um
+      await interacao.update({
+        embeds: [embedCanal(4, 'Time A')],
+        components: linhaChannelSelect('configurar_canal_a', configAtual?.canal_time_a_id),
+      });
+
+      interacao = await mensagem.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id,
+        componentType: ComponentType.ChannelSelect,
+        time: TEMPO_LIMITE_MS,
+      });
+
+      const canalTimeAId = interacao.values[0];
+
+      // 5/5 - canal Time B, pré-selecionado se já houver um
+      await interacao.update({
+        embeds: [embedCanal(5, 'Time B')],
+        components: linhaChannelSelect('configurar_canal_b', configAtual?.canal_time_b_id),
+      });
+
+      interacao = await mensagem.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id,
+        componentType: ComponentType.ChannelSelect,
+        time: TEMPO_LIMITE_MS,
+      });
+
+      const canalTimeBId = interacao.values[0];
 
       await salvarConfiguracaoServidor(message.guild.id, {
         quemPodeIniciarMix,
@@ -153,10 +201,10 @@ module.exports = {
       });
       await salvarCanaisTimes(message.guild.id, { canalTimeAId, canalTimeBId });
 
-      await message.channel.send('✅ Configuração salva com sucesso!');
+      await interacao.update({ embeds: [embedConcluido()], components: [] });
     } catch (erro) {
       if (erro?.code === 'InteractionCollectorError') {
-        return message.channel.send('⏱️ Tempo esgotado. Rode `!configurar` de novo quando quiser.');
+        return mensagem.edit({ embeds: [embedTempoEsgotado()], components: [] });
       }
       throw erro;
     }

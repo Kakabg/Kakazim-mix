@@ -39,9 +39,42 @@ async function iniciarBanco() {
       canal_time_a_id TEXT,
       canal_time_b_id TEXT,
       cargo_admin_id TEXT,
-      quem_pode_iniciar_mix TEXT NOT NULL DEFAULT 'todos',
-      quem_pode_gerenciar_mix TEXT NOT NULL DEFAULT 'admins'
+      quem_pode_iniciar_mix TEXT[] NOT NULL DEFAULT ARRAY['todos']::TEXT[],
+      quem_pode_gerenciar_mix TEXT NOT NULL DEFAULT 'criador'
     )
+  `);
+
+  await migrarConfigServidorParaNovoEsquema();
+}
+
+/**
+ * Ajusta linhas de config_servidor criadas antes de quem_pode_iniciar_mix virar
+ * lista (converte o valor único existente num array de 1 item) e antes de
+ * quem_pode_gerenciar_mix virar só 'criador'/'todos' (qualquer valor antigo tipo
+ * 'dono'/'admins' vira 'criador', já que dono/admins passaram a ter permissão
+ * garantida por padrão, então 'criador' reproduz o nível de restrição anterior).
+ */
+async function migrarConfigServidorParaNovoEsquema() {
+  const { rows } = await pool.query(
+    `SELECT data_type FROM information_schema.columns
+     WHERE table_name = 'config_servidor' AND column_name = 'quem_pode_iniciar_mix'`
+  );
+
+  if (rows[0] && rows[0].data_type !== 'ARRAY') {
+    await pool.query(`
+      ALTER TABLE config_servidor
+        ALTER COLUMN quem_pode_iniciar_mix DROP DEFAULT,
+        ALTER COLUMN quem_pode_iniciar_mix TYPE TEXT[] USING ARRAY[quem_pode_iniciar_mix],
+        ALTER COLUMN quem_pode_iniciar_mix SET DEFAULT ARRAY['todos']::TEXT[]
+    `);
+  }
+
+  await pool.query(`
+    UPDATE config_servidor SET quem_pode_gerenciar_mix = 'criador'
+    WHERE quem_pode_gerenciar_mix NOT IN ('criador', 'todos')
+  `);
+  await pool.query(`
+    ALTER TABLE config_servidor ALTER COLUMN quem_pode_gerenciar_mix SET DEFAULT 'criador'
   `);
 }
 
@@ -209,6 +242,16 @@ async function salvarCanaisTimes(guildId, { canalTimeAId, canalTimeBId }) {
   return buscarConfigServidor(guildId);
 }
 
+async function salvarCargoAdmin(guildId, cargoAdminId) {
+  await pool.query(
+    `INSERT INTO config_servidor (guild_id, cargo_admin_id)
+     VALUES ($1, $2)
+     ON CONFLICT (guild_id) DO UPDATE SET cargo_admin_id = excluded.cargo_admin_id`,
+    [guildId, cargoAdminId]
+  );
+  return buscarConfigServidor(guildId);
+}
+
 async function salvarConfiguracaoServidor(guildId, { quemPodeIniciarMix, quemPodeGerenciarMix, cargoAdminId }) {
   await pool.query(
     `INSERT INTO config_servidor (guild_id, quem_pode_iniciar_mix, quem_pode_gerenciar_mix, cargo_admin_id)
@@ -237,5 +280,6 @@ module.exports = {
   buscarConfigServidor,
   buscarOuCriarConfigServidor,
   salvarCanaisTimes,
+  salvarCargoAdmin,
   salvarConfiguracaoServidor,
 };

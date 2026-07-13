@@ -13,7 +13,7 @@ const {
   listarTodosOsNicks,
   buscarOuCriarConfigServidor,
 } = require('../../banco/db');
-const { atendeRegraDePermissao } = require('../../utils/permissoes');
+const { podeIniciarMix, podeGerenciarMix } = require('../../utils/permissoes');
 const { montarTimesBalanceados, montarTimesComTravados, mediaLevel, embaralhar } = require('./montarTimes');
 
 const TAMANHO_TIME = Number.parseInt(process.env.TAMANHO_TIME, 10) || 5;
@@ -311,12 +311,7 @@ function ehBotaoRestrito(customId) {
 function podeInteragir(interaction, autorId, config) {
   if (!ehBotaoRestrito(interaction.customId)) return true;
   if (interaction.user.id === autorId) return true;
-  return atendeRegraDePermissao(
-    config.quem_pode_gerenciar_mix,
-    interaction.member,
-    interaction.guild,
-    config.cargo_admin_id
-  );
+  return podeGerenciarMix(config.quem_pode_gerenciar_mix, interaction.member, interaction.guild, config.cargo_admin_id);
 }
 
 async function moverJogadoresParaCanal(guild, jogadores, canalId) {
@@ -350,7 +345,7 @@ module.exports = {
 
     const membroAutor = message.member ?? (await message.guild.members.fetch(message.author.id));
 
-    if (!atendeRegraDePermissao(config.quem_pode_iniciar_mix, membroAutor, message.guild, config.cargo_admin_id)) {
+    if (!podeIniciarMix(config.quem_pode_iniciar_mix, membroAutor, message.guild, config.cargo_admin_id)) {
       return message.reply('🚫 Você não tem permissão para iniciar um `!mix` neste servidor.');
     }
 

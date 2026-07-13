@@ -10,14 +10,27 @@ function ehAdmin(membro, guild, cargoAdminId) {
 }
 
 /**
- * Confere se um membro atende a uma regra de permissão salva em
- * config_servidor ('dono', 'admins' ou 'todos').
+ * `selecoes` é a lista (0 a 3 itens) marcada em config_servidor.quem_pode_iniciar_mix:
+ * 'dono', 'admins' e/ou 'todos'. Basta atender UMA das opções marcadas.
  */
-function atendeRegraDePermissao(regra, membro, guild, cargoAdminId) {
-  if (regra === 'todos') return true;
-  if (regra === 'dono') return membro.id === guild.ownerId;
-  if (regra === 'admins') return ehAdmin(membro, guild, cargoAdminId);
+function podeIniciarMix(selecoes, membro, guild, cargoAdminId) {
+  if (!selecoes || selecoes.length === 0) return false;
+  if (selecoes.includes('todos')) return true;
+  if (selecoes.includes('dono') && membro.id === guild.ownerId) return true;
+  if (selecoes.includes('admins') && ehAdmin(membro, guild, cargoAdminId)) return true;
   return false;
 }
 
-module.exports = { ehAdmin, atendeRegraDePermissao };
+/**
+ * Dono e admins sempre podem gerenciar qualquer mix em andamento (aprovar,
+ * trocar times, mexer nas salas de voz). `regraGerenciar` ('criador' ou
+ * 'todos') só decide se, ALÉM deles, mais alguém também pode - quem criou
+ * aquela sessão específica de !mix já é sempre liberado separadamente, na
+ * checagem de quem chamou o comando.
+ */
+function podeGerenciarMix(regraGerenciar, membro, guild, cargoAdminId) {
+  if (ehAdmin(membro, guild, cargoAdminId)) return true;
+  return regraGerenciar === 'todos';
+}
+
+module.exports = { ehAdmin, podeIniciarMix, podeGerenciarMix };
