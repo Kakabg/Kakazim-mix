@@ -27,39 +27,23 @@ function nomeExibicao(jogador, fallback) {
 }
 
 /**
- * Extrai os nicks informados via "+nick" (adicionar) e "-nick" (remover) numa
- * lista de tokens. Cada "+" ou "-" inicia um novo nick, que pode conter
- * espaços até o próximo "+"/"-".
+ * Extrai os nicks informados via "+nick" (adicionar) e "-nick" (remover) de um
+ * texto. Cada "+" ou "-" inicia um novo nick, que vai até o próximo "+"/"-"
+ * (ou o fim do texto) - com ou sem espaço separando os itens, já que o corte
+ * é feito pelo sinal, não por espaço.
  * Ex: "+Fulano -Ciclano" -> { adicionar: ["Fulano"], remover: ["Ciclano"] }
  * Ex: "+Dj Salamoni +MKB" -> { adicionar: ["Dj Salamoni", "MKB"], remover: [] }
+ * Ex: "+gnomo+fera-kaka" -> { adicionar: ["gnomo", "fera"], remover: ["kaka"] }
  */
-function agruparPorSinal(tokens) {
-  const indicePrimeiro = tokens.findIndex((arg) => arg.startsWith('+') || arg.startsWith('-'));
-  if (indicePrimeiro === -1) return { adicionar: [], remover: [] };
-
+function agruparPorSinal(texto) {
   const adicionar = [];
   const remover = [];
-  let atual = null;
-  let sinalAtual = null;
 
-  const finalizarAtual = () => {
-    if (atual === null) return;
-    const nick = atual.trim();
-    if (!nick) return;
-    (sinalAtual === '+' ? adicionar : remover).push(nick);
-  };
-
-  for (const token of tokens.slice(indicePrimeiro)) {
-    if (token.startsWith('+') || token.startsWith('-')) {
-      finalizarAtual();
-      sinalAtual = token[0];
-      atual = token.slice(1);
-    } else if (atual !== null) {
-      atual += ` ${token}`;
-    }
+  for (const [, sinal, nomeBruto] of texto.matchAll(/([+-])([^+-]*)/g)) {
+    const nome = nomeBruto.trim();
+    if (!nome) continue;
+    (sinal === '+' ? adicionar : remover).push(nome);
   }
-
-  finalizarAtual();
 
   return { adicionar, remover };
 }
@@ -68,18 +52,19 @@ function agruparPorSinal(tokens) {
  * Interpreta os argumentos do !mix. Formato normal: "+nick" adiciona,
  * "-nick" remove. Formato "vs" (quem vem antes do "vs" trava no Time A, quem
  * vem depois trava no Time B): "+a +b vs +c +d", aceitando "-nick" em
- * qualquer um dos dois lados pra remover do time todo.
+ * qualquer um dos dois lados pra remover do time todo. Em ambos os formatos,
+ * os itens podem vir colados ("+a+b") ou separados por espaço ("+a +b").
  */
 function extrairComandoMix(args) {
   const indiceVs = args.findIndex((arg) => arg.toLowerCase() === 'vs');
 
   if (indiceVs === -1) {
-    const { adicionar, remover } = agruparPorSinal(args);
+    const { adicionar, remover } = agruparPorSinal(args.join(' '));
     return { modoVs: false, adicionar, remover };
   }
 
-  const antes = agruparPorSinal(args.slice(0, indiceVs));
-  const depois = agruparPorSinal(args.slice(indiceVs + 1));
+  const antes = agruparPorSinal(args.slice(0, indiceVs).join(' '));
+  const depois = agruparPorSinal(args.slice(indiceVs + 1).join(' '));
 
   return {
     modoVs: true,
