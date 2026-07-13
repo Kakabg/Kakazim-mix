@@ -71,7 +71,7 @@ function embedCargoAdmin() {
 function linhaRoleSelect(cargoAtualId) {
   const menu = new RoleSelectMenuBuilder().setCustomId('configurar_cargo_admin').setMinValues(1).setMaxValues(1);
   if (cargoAtualId) menu.setDefaultRoles(cargoAtualId);
-  return [new ActionRowBuilder().addComponents(menu)];
+  return new ActionRowBuilder().addComponents(menu);
 }
 
 function embedCanal(numero, rotulo) {
@@ -85,7 +85,44 @@ function linhaChannelSelect(customId, canalAtualId) {
     .setMinValues(1)
     .setMaxValues(1);
   if (canalAtualId) menu.setDefaultChannels(canalAtualId);
-  return [new ActionRowBuilder().addComponents(menu)];
+  return new ActionRowBuilder().addComponents(menu);
+}
+
+function linhaBotaoConfirmarSelecao(customId, disabled) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(customId)
+      .setLabel('✅ Confirmar')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled)
+  );
+}
+
+/**
+ * Espera o dono trocar a seleção de um Role/Channel Select (o padrão
+ * pré-selecionado atualiza a cada troca) e clicar em "Confirmar" pra aceitar
+ * o valor atual - seja o padrão pré-preenchido (sem precisar trocar nada) ou
+ * um valor novo que ele tenha escolhido.
+ */
+async function aguardarSelecaoComConfirmar({ mensagem, message, embed, montarLinhaSelect, valorInicial, customIdConfirmar }) {
+  let valorAtual = valorInicial ?? null;
+
+  while (true) {
+    const interacao = await mensagem.awaitMessageComponent({
+      filter: (i) => i.user.id === message.author.id,
+      time: TEMPO_LIMITE_MS,
+    });
+
+    if (interacao.customId === customIdConfirmar) {
+      return { valor: valorAtual, interacao };
+    }
+
+    valorAtual = interacao.values[0];
+    await interacao.update({
+      embeds: [embed],
+      components: [montarLinhaSelect(valorAtual), linhaBotaoConfirmarSelecao(customIdConfirmar, false)],
+    });
+  }
 }
 
 function embedConcluido() {
@@ -153,46 +190,64 @@ module.exports = {
       const quemPodeGerenciarMix = interacao.customId === 'configurar_gerenciar_todos' ? 'todos' : 'criador';
 
       // 3/5 - cargo admin, pré-selecionado se já houver um (ex: criado no guildCreate)
+      const cargoInicial = configAtual?.cargo_admin_id ?? null;
       await interacao.update({
         embeds: [embedCargoAdmin()],
-        components: linhaRoleSelect(configAtual?.cargo_admin_id),
+        components: [linhaRoleSelect(cargoInicial), linhaBotaoConfirmarSelecao('configurar_cargo_admin_confirmar', !cargoInicial)],
       });
 
-      interacao = await mensagem.awaitMessageComponent({
-        filter: (i) => i.user.id === message.author.id,
-        componentType: ComponentType.RoleSelect,
-        time: TEMPO_LIMITE_MS,
+      const resultadoCargo = await aguardarSelecaoComConfirmar({
+        mensagem,
+        message,
+        embed: embedCargoAdmin(),
+        montarLinhaSelect: linhaRoleSelect,
+        valorInicial: cargoInicial,
+        customIdConfirmar: 'configurar_cargo_admin_confirmar',
       });
-
-      const cargoAdminId = interacao.values[0];
+      const cargoAdminId = resultadoCargo.valor;
+      interacao = resultadoCargo.interacao;
 
       // 4/5 - canal Time A, pré-selecionado se já houver um
+      const canalAInicial = configAtual?.canal_time_a_id ?? null;
       await interacao.update({
         embeds: [embedCanal(4, 'Time A')],
-        components: linhaChannelSelect('configurar_canal_a', configAtual?.canal_time_a_id),
+        components: [
+          linhaChannelSelect('configurar_canal_a', canalAInicial),
+          linhaBotaoConfirmarSelecao('configurar_canal_a_confirmar', !canalAInicial),
+        ],
       });
 
-      interacao = await mensagem.awaitMessageComponent({
-        filter: (i) => i.user.id === message.author.id,
-        componentType: ComponentType.ChannelSelect,
-        time: TEMPO_LIMITE_MS,
+      const resultadoCanalA = await aguardarSelecaoComConfirmar({
+        mensagem,
+        message,
+        embed: embedCanal(4, 'Time A'),
+        montarLinhaSelect: (id) => linhaChannelSelect('configurar_canal_a', id),
+        valorInicial: canalAInicial,
+        customIdConfirmar: 'configurar_canal_a_confirmar',
       });
-
-      const canalTimeAId = interacao.values[0];
+      const canalTimeAId = resultadoCanalA.valor;
+      interacao = resultadoCanalA.interacao;
 
       // 5/5 - canal Time B, pré-selecionado se já houver um
+      const canalBInicial = configAtual?.canal_time_b_id ?? null;
       await interacao.update({
         embeds: [embedCanal(5, 'Time B')],
-        components: linhaChannelSelect('configurar_canal_b', configAtual?.canal_time_b_id),
+        components: [
+          linhaChannelSelect('configurar_canal_b', canalBInicial),
+          linhaBotaoConfirmarSelecao('configurar_canal_b_confirmar', !canalBInicial),
+        ],
       });
 
-      interacao = await mensagem.awaitMessageComponent({
-        filter: (i) => i.user.id === message.author.id,
-        componentType: ComponentType.ChannelSelect,
-        time: TEMPO_LIMITE_MS,
+      const resultadoCanalB = await aguardarSelecaoComConfirmar({
+        mensagem,
+        message,
+        embed: embedCanal(5, 'Time B'),
+        montarLinhaSelect: (id) => linhaChannelSelect('configurar_canal_b', id),
+        valorInicial: canalBInicial,
+        customIdConfirmar: 'configurar_canal_b_confirmar',
       });
-
-      const canalTimeBId = interacao.values[0];
+      const canalTimeBId = resultadoCanalB.valor;
+      interacao = resultadoCanalB.interacao;
 
       await salvarConfiguracaoServidor(message.guild.id, {
         quemPodeIniciarMix,

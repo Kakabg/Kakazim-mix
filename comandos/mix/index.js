@@ -3,6 +3,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   ComponentType,
   MessageFlags,
 } = require('discord.js');
@@ -329,9 +330,75 @@ async function moverJogadoresParaCanal(guild, jogadores, canalId) {
   }
 }
 
-async function moverTimesParaVoz(guild, timeA, timeB, config) {
-  await moverJogadoresParaCanal(guild, timeA, config.canal_time_a_id);
-  await moverJogadoresParaCanal(guild, timeB, config.canal_time_b_id);
+function contarMembrosReais(canal) {
+  if (!canal) return 0;
+  return canal.members.filter((membro) => !membro.user.bot).size;
+}
+
+/**
+ * Acha o menor N >= 2 tal que nem "Time A (N)" nem "Time B (N)" já existam
+ * como sala de voz no servidor, pra numerar uma nova sessão simultânea sem
+ * colidir com outras sessões temporárias já em andamento.
+ */
+function proximoNumeroDeSalaLivre(guild) {
+  let numero = 2;
+  while (
+    guild.channels.cache.some((c) => c.name === `Time A (${numero})`) ||
+    guild.channels.cache.some((c) => c.name === `Time B (${numero})`)
+  ) {
+    numero += 1;
+  }
+  return numero;
+}
+
+/**
+ * Decide em quais salas de voz mover os times: usa as salas principais
+ * configuradas (Time A/Time B) se elas existirem e estiverem vazias; senão
+ * (já tem gente dentro, indicando outro mix em andamento, ou nem estão
+ * configuradas) cria um par de salas temporárias extras só pra essa sessão.
+ */
+async function resolverCanaisParaMover(guild, config) {
+  const canalA = config.canal_time_a_id
+    ? await guild.channels.fetch(config.canal_time_a_id).catch(() => null)
+    : null;
+  const canalB = config.canal_time_b_id
+    ? await guild.channels.fetch(config.canal_time_b_id).catch(() => null)
+    : null;
+
+  const principalDisponivel = canalA && canalB && contarMembrosReais(canalA) === 0 && contarMembrosReais(canalB) === 0;
+
+  if (principalDisponivel) {
+    return { canalTimeAId: canalA.id, canalTimeBId: canalB.id, temporarios: false };
+  }
+
+  const numero = proximoNumeroDeSalaLivre(guild);
+  const novoCanalA = await guild.channels.create({ name: `Time A (${numero})`, type: ChannelType.GuildVoice });
+  const novoCanalB = await guild.channels.create({ name: `Time B (${numero})`, type: ChannelType.GuildVoice });
+
+  return { canalTimeAId: novoCanalA.id, canalTimeBId: novoCanalB.id, temporarios: true, numero };
+}
+
+async function moverTimesParaVoz(guild, timeA, timeB, canais) {
+  await moverJogadoresParaCanal(guild, timeA, canais.canalTimeAId);
+  await moverJogadoresParaCanal(guild, timeB, canais.canalTimeBId);
+}
+
+/**
+ * Apaga as salas temporárias 30s depois de todo mundo voltar pro canal
+ * original - dá tempo de qualquer straggler ainda saindo da sala. Nunca mexe
+ * nas salas principais configuradas do servidor, só nas criadas dinamicamente.
+ */
+function agendarExclusaoCanaisTemporarios(guild, canalTimeAId, canalTimeBId) {
+  setTimeout(async () => {
+    for (const canalId of [canalTimeAId, canalTimeBId]) {
+      try {
+        const canal = await guild.channels.fetch(canalId).catch(() => null);
+        if (canal) await canal.delete();
+      } catch (erro) {
+        console.error(`Falha ao excluir sala de voz temporária ${canalId}:`, erro);
+      }
+    }
+  }, 30_000);
 }
 
 module.exports = {
@@ -531,6 +598,7 @@ module.exports = {
     let modoTroca = false;
     let selecionadosA = new Set();
     let selecionadosB = new Set();
+    let canaisDaSessao = null;
 
     const mensagem = await message.channel.send({
       embeds: [construirEmbedSorteio(timeAtual, 'Aguardando aprovação')],
@@ -660,8 +728,13 @@ module.exports = {
 
       if (interaction.customId === 'mix_voz_sim') {
         await interaction.deferUpdate();
-        await moverTimesParaVoz(message.guild, timeAtual.timeA, timeAtual.timeB, config);
-        const embed = construirEmbedSorteio(timeAtual, '✅ Times definidos - jogadores movidos para as salas de voz');
+        canaisDaSessao = await resolverCanaisParaMover(message.guild, config);
+        await moverTimesParaVoz(message.guild, timeAtual.timeA, timeAtual.timeB, canaisDaSessao);
+
+        const aviso = canaisDaSessao.temporarios
+          ? `✅ Times definidos - as salas principais estavam ocupadas, então movi todo mundo pras salas temporárias "Time A (${canaisDaSessao.numero})"/"Time B (${canaisDaSessao.numero})"`
+          : '✅ Times definidos - jogadores movidos para as salas de voz';
+        const embed = construirEmbedSorteio(timeAtual, aviso);
         await mensagem.edit({ embeds: [embed], components: [linhaBotaoJuntar()] });
         return;
       }
@@ -683,6 +756,10 @@ module.exports = {
         );
         const embed = construirEmbedSorteio(timeAtual, '✅ Povo reunido de volta no canal original');
         await mensagem.edit({ embeds: [embed], components: [] });
+
+        if (canaisDaSessao?.temporarios) {
+          agendarExclusaoCanaisTemporarios(message.guild, canaisDaSessao.canalTimeAId, canaisDaSessao.canalTimeBId);
+        }
       }
     });
 
