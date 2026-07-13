@@ -1,0 +1,19 @@
+{
+  "name": "kakazim-mix",
+  "version": "1.0.0",
+  "description": "Bot de Discord para gestao de mix de CS, para qualquer servidor",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "importar-do-kakazim": "node scripts/importar-do-kakazim.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  }
+}
