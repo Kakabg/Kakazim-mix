@@ -45,9 +45,10 @@ function linhaTogglesIniciar(selecionados) {
 
 function embedGerenciar() {
   return new EmbedBuilder()
-    .setTitle('2/5 - Quem mais pode aprovar/trocar times/mexer nas salas de voz?')
+    .setTitle('2/5 - Quem mais pode aprovar/trocar times e juntar o povo depois?')
     .setDescription(
-      'O dono e os admins do servidor sempre podem gerenciar qualquer mix, além de quem criou aquela sessão específica. Escolha se mais alguém também pode:'
+      'O dono e os admins do servidor sempre podem gerenciar qualquer mix, além de quem criou aquela sessão específica. Escolha se mais alguém também pode:\n\n' +
+        '_Separar em salas de voz (Time A/Time B) não entra nessa regra - isso já fica liberado pra qualquer jogador da sessão._'
     )
     .setColor(COR_EMBED);
 }

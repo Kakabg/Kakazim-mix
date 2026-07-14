@@ -14,7 +14,7 @@ const {
   listarTodosOsNicks,
   buscarOuCriarConfigServidor,
 } = require('../../banco/db');
-const { podeIniciarMix, podeGerenciarMix } = require('../../utils/permissoes');
+const { podeIniciarMix, podeInteragirComMix } = require('../../utils/permissoes');
 const { montarTimesBalanceados, montarTimesComTravados, mediaLevel, embaralhar } = require('./montarTimes');
 
 const TAMANHO_TIME = Number.parseInt(process.env.TAMANHO_TIME, 10) || 5;
@@ -282,24 +282,6 @@ function trocarJogadores(timeAtual, selecionadosA, selecionadosB) {
   };
 }
 
-function ehBotaoRestrito(customId) {
-  if (
-    customId === 'mix_aprovar' ||
-    customId === 'mix_sortear' ||
-    customId === 'mix_cancelar' ||
-    customId === 'mix_juntar'
-  ) {
-    return true;
-  }
-  return customId.startsWith('mix_troca');
-}
-
-function podeInteragir(interaction, autorId, config) {
-  if (!ehBotaoRestrito(interaction.customId)) return true;
-  if (interaction.user.id === autorId) return true;
-  return podeGerenciarMix(config.quem_pode_gerenciar_mix, interaction.member, interaction.guild, config.cargo_admin_id);
-}
-
 async function moverJogadoresParaCanal(guild, jogadores, canalId) {
   if (!canalId) return;
 
@@ -559,6 +541,16 @@ module.exports = {
       contextoMontagem = { modoVs: false, pool: jogadoresRegistrados };
     }
 
+    // Todo mundo que faz parte da sessão (independente de time ou de trocas
+    // futuras entre A/B) - usado pra liberar o botão de separar em salas de
+    // voz pra qualquer um deles, sem depender de admin/criador.
+    const idsDaSessao = new Set(
+      (contextoMontagem.modoVs
+        ? [...contextoMontagem.travadosA, ...contextoMontagem.travadosB, ...contextoMontagem.livres]
+        : contextoMontagem.pool
+      ).map((j) => j.discord_id)
+    );
+
     function remontarTimes() {
       if (contextoMontagem.modoVs) {
         return montarTimesComTravados({
@@ -606,7 +598,17 @@ module.exports = {
     }
 
     coletor.on('collect', async (interaction) => {
-      if (!podeInteragir(interaction, message.author.id, config)) {
+      const autorizado = podeInteragirComMix({
+        customId: interaction.customId,
+        usuarioId: interaction.user.id,
+        autorId: message.author.id,
+        idsDaSessao,
+        membro: interaction.member,
+        guild: interaction.guild,
+        config,
+      });
+
+      if (!autorizado) {
         await interaction.reply({
           content: '🚫 Você não tem permissão para interagir com este mix.',
           flags: MessageFlags.Ephemeral,
