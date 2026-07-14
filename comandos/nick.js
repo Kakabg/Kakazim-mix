@@ -1,5 +1,5 @@
 const {
-  buscarJogador,
+  buscarPerfil,
   adicionarApelidoAlternativo,
   buscarDonoDoApelido,
   buscarConfigServidor,
@@ -36,7 +36,7 @@ module.exports = {
       return message.reply('Uso correto: `!nick <apelido> @jogador`');
     }
 
-    const jogadorAlvo = await buscarJogador(guildId, mencao.id);
+    const jogadorAlvo = await buscarPerfil(mencao.id);
     if (!jogadorAlvo) {
       return message.reply('Esse jogador ainda não está registrado. Peça para ele usar `!play`.');
     }

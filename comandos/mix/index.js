@@ -8,9 +8,9 @@ const {
   MessageFlags,
 } = require('discord.js');
 const {
-  buscarJogador,
+  buscarPerfil,
   buscarJogadorPorNick,
-  criarJogador,
+  criarPerfil,
   listarTodosOsNicks,
   buscarOuCriarConfigServidor,
 } = require('../../banco/db');
@@ -396,11 +396,10 @@ module.exports = {
     const idsAdicionados = new Set();
 
     for (const membro of membrosVoz.values()) {
-      let jogador = await buscarJogador(guildId, membro.id);
+      let jogador = await buscarPerfil(membro.id);
 
       if (!jogador) {
-        jogador = await criarJogador({
-          guildId,
+        jogador = await criarPerfil({
           discordId: membro.id,
           nickPrincipal: membro.displayName,
           levelGc: NIVEL_PADRAO_NOVATO,

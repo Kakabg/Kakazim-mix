@@ -1,5 +1,5 @@
 const { EmbedBuilder } = require('discord.js');
-const { buscarJogador, criarJogador, adicionarApelidoAlternativo } = require('../banco/db');
+const { buscarPerfil, criarPerfil, adicionarApelidoAlternativo } = require('../banco/db');
 
 function construirEmbedPerfil(jogador) {
   const nomeExibido = jogador.apelido_display || jogador.nick_principal;
@@ -19,7 +19,7 @@ module.exports = {
   async executar(message, args) {
     const guildId = message.guild.id;
 
-    const jogadorExistente = await buscarJogador(guildId, message.author.id);
+    const jogadorExistente = await buscarPerfil(message.author.id);
     if (jogadorExistente) {
       return message.reply({ embeds: [construirEmbedPerfil(jogadorExistente)] });
     }
@@ -66,7 +66,7 @@ module.exports = {
       return message.reply('O level informado é inválido.');
     }
 
-    await criarJogador({ guildId, discordId: message.author.id, nickPrincipal: nick, levelGc });
+    await criarPerfil({ discordId: message.author.id, nickPrincipal: nick, levelGc });
 
     for (const apelido of apelidosAlternativos) {
       await adicionarApelidoAlternativo(guildId, message.author.id, apelido);

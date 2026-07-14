@@ -8,13 +8,14 @@ pool.on('error', (erro) => {
 
 async function iniciarBanco() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS jogadores (
-      guild_id TEXT NOT NULL,
-      discord_id TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS perfis (
+      discord_id TEXT PRIMARY KEY,
       nick_principal TEXT NOT NULL,
       apelido_display TEXT,
       level_gc INTEGER NOT NULL,
-      PRIMARY KEY (guild_id, discord_id)
+      level_faceit TEXT,
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      atualizado_por TEXT
     )
   `);
 
@@ -24,7 +25,7 @@ async function iniciarBanco() {
       guild_id TEXT NOT NULL,
       jogador_discord_id TEXT NOT NULL,
       apelido TEXT NOT NULL,
-      FOREIGN KEY (guild_id, jogador_discord_id) REFERENCES jogadores (guild_id, discord_id)
+      FOREIGN KEY (jogador_discord_id) REFERENCES perfis (discord_id)
     )
   `);
 
@@ -78,38 +79,34 @@ async function migrarConfigServidorParaNovoEsquema() {
   `);
 }
 
-async function buscarJogador(guildId, discordId) {
-  const { rows } = await pool.query(
-    'SELECT * FROM jogadores WHERE guild_id = $1 AND discord_id = $2',
-    [guildId, discordId]
-  );
+async function buscarPerfil(discordId) {
+  const { rows } = await pool.query('SELECT * FROM perfis WHERE discord_id = $1', [discordId]);
   return rows[0];
 }
 
-async function criarJogador({ guildId, discordId, nickPrincipal, levelGc }) {
+async function criarPerfil({ discordId, nickPrincipal, levelGc, atualizadoPor }) {
   await pool.query(
-    `INSERT INTO jogadores (guild_id, discord_id, nick_principal, apelido_display, level_gc)
-     VALUES ($1, $2, $3, $3, $4)`,
-    [guildId, discordId, nickPrincipal, levelGc]
+    `INSERT INTO perfis (discord_id, nick_principal, apelido_display, level_gc, atualizado_por)
+     VALUES ($1, $2, $2, $3, $4)`,
+    [discordId, nickPrincipal, levelGc, atualizadoPor ?? discordId]
   );
-  return buscarJogador(guildId, discordId);
+  return buscarPerfil(discordId);
 }
 
-async function atualizarLevel(guildId, discordId, levelGc) {
-  await pool.query('UPDATE jogadores SET level_gc = $1 WHERE guild_id = $2 AND discord_id = $3', [
-    levelGc,
-    guildId,
-    discordId,
-  ]);
-  return buscarJogador(guildId, discordId);
+async function atualizarLevel(discordId, levelGc, atualizadoPor) {
+  await pool.query(
+    'UPDATE perfis SET level_gc = $1, atualizado_em = now(), atualizado_por = $2 WHERE discord_id = $3',
+    [levelGc, atualizadoPor, discordId]
+  );
+  return buscarPerfil(discordId);
 }
 
-async function atualizarApelido(guildId, discordId, apelidoDisplay) {
+async function atualizarApelido(discordId, apelidoDisplay, atualizadoPor) {
   await pool.query(
-    'UPDATE jogadores SET apelido_display = $1 WHERE guild_id = $2 AND discord_id = $3',
-    [apelidoDisplay, guildId, discordId]
+    'UPDATE perfis SET apelido_display = $1, atualizado_em = now(), atualizado_por = $2 WHERE discord_id = $3',
+    [apelidoDisplay, atualizadoPor, discordId]
   );
-  return buscarJogador(guildId, discordId);
+  return buscarPerfil(discordId);
 }
 
 async function adicionarApelidoAlternativo(guildId, discordId, apelido) {
@@ -139,18 +136,23 @@ async function listarApelidosAlternativos(guildId, discordId) {
   return rows.map((linha) => linha.apelido);
 }
 
+/**
+ * nick_principal/apelido_display agora são globais (tabela perfis), então a
+ * busca direta não é mais restrita ao servidor. Só o apelido alternativo
+ * continua por servidor (apelidos_alternativos.guild_id).
+ */
 async function buscarJogadorPorNick(guildId, nick) {
   const { rows: diretas } = await pool.query(
-    `SELECT * FROM jogadores
-     WHERE guild_id = $1 AND (LOWER(nick_principal) = LOWER($2) OR LOWER(apelido_display) = LOWER($2))`,
-    [guildId, nick]
+    `SELECT * FROM perfis
+     WHERE LOWER(nick_principal) = LOWER($1) OR LOWER(apelido_display) = LOWER($1)`,
+    [nick]
   );
   if (diretas[0]) return diretas[0];
 
   const { rows: viaAlternativo } = await pool.query(
-    `SELECT j.* FROM jogadores j
-     JOIN apelidos_alternativos a ON a.guild_id = j.guild_id AND a.jogador_discord_id = j.discord_id
-     WHERE j.guild_id = $1 AND LOWER(a.apelido) = LOWER($2)
+    `SELECT p.* FROM perfis p
+     JOIN apelidos_alternativos a ON a.jogador_discord_id = p.discord_id
+     WHERE a.guild_id = $1 AND LOWER(a.apelido) = LOWER($2)
      LIMIT 1`,
     [guildId, nick]
   );
@@ -159,22 +161,22 @@ async function buscarJogadorPorNick(guildId, nick) {
 
 /**
  * Procura se algum jogador ALÉM de `discordIdExcluir` já usa esse nick como
- * nick_principal, apelido_display ou apelido alternativo, no mesmo servidor.
- * Retorna o jogador dono do nick, ou undefined se estiver livre.
+ * nick_principal/apelido_display (global) ou como apelido alternativo no
+ * mesmo servidor. Retorna o jogador dono do nick, ou undefined se estiver livre.
  */
 async function buscarDonoDoApelido(guildId, nick, discordIdExcluir) {
   const { rows: diretas } = await pool.query(
-    `SELECT * FROM jogadores
-     WHERE guild_id = $1 AND discord_id != $2
-     AND (LOWER(nick_principal) = LOWER($3) OR LOWER(apelido_display) = LOWER($3))`,
-    [guildId, discordIdExcluir, nick]
+    `SELECT * FROM perfis
+     WHERE discord_id != $1
+     AND (LOWER(nick_principal) = LOWER($2) OR LOWER(apelido_display) = LOWER($2))`,
+    [discordIdExcluir, nick]
   );
   if (diretas[0]) return diretas[0];
 
   const { rows: viaAlternativo } = await pool.query(
-    `SELECT j.* FROM jogadores j
-     JOIN apelidos_alternativos a ON a.guild_id = j.guild_id AND a.jogador_discord_id = j.discord_id
-     WHERE j.guild_id = $1 AND a.jogador_discord_id != $2 AND LOWER(a.apelido) = LOWER($3)
+    `SELECT p.* FROM perfis p
+     JOIN apelidos_alternativos a ON a.jogador_discord_id = p.discord_id
+     WHERE a.guild_id = $1 AND a.jogador_discord_id != $2 AND LOWER(a.apelido) = LOWER($3)
      LIMIT 1`,
     [guildId, discordIdExcluir, nick]
   );
@@ -182,17 +184,15 @@ async function buscarDonoDoApelido(guildId, nick, discordIdExcluir) {
 }
 
 /**
- * Lista, sem duplicatas, todos os nicks conhecidos no servidor: nick_principal,
- * apelido_display e apelidos_alternativos de todos os jogadores daquele guild_id.
- * Útil para sugerir nomes parecidos quando uma busca por nick não encontra ninguém.
+ * Lista, sem duplicatas, os nicks conhecidos: nick_principal e apelido_display
+ * de todos os perfis (globais) + apelidos_alternativos cadastrados naquele
+ * servidor. Útil para sugerir nomes parecidos quando uma busca por nick não
+ * encontra ninguém.
  */
 async function listarTodosOsNicks(guildId) {
   const nicks = new Set();
 
-  const { rows: principais } = await pool.query(
-    'SELECT nick_principal, apelido_display FROM jogadores WHERE guild_id = $1',
-    [guildId]
-  );
+  const { rows: principais } = await pool.query('SELECT nick_principal, apelido_display FROM perfis');
   for (const linha of principais) {
     if (linha.nick_principal) nicks.add(linha.nick_principal);
     if (linha.apelido_display) nicks.add(linha.apelido_display);
@@ -268,8 +268,8 @@ async function salvarConfiguracaoServidor(guildId, { quemPodeIniciarMix, quemPod
 module.exports = {
   pool,
   iniciarBanco,
-  buscarJogador,
-  criarJogador,
+  buscarPerfil,
+  criarPerfil,
   atualizarLevel,
   atualizarApelido,
   adicionarApelidoAlternativo,

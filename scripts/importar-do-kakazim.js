@@ -1,9 +1,7 @@
 require('dotenv').config();
-const { buscarJogador, criarJogador, atualizarApelido } = require('../banco/db');
+const { buscarPerfil, criarPerfil, atualizarApelido } = require('../banco/db');
 
-const GUILD_ID_PADRAO = '772208315178156052';
-
-async function importar(url, guildId) {
+async function importar(url) {
   const resposta = await fetch(url);
   if (!resposta.ok) {
     throw new Error(`Falha ao buscar jogadores (${resposta.status}): ${await resposta.text()}`);
@@ -14,7 +12,7 @@ async function importar(url, guildId) {
   let jaExistiam = 0;
 
   for (const jogador of jogadores) {
-    const existente = await buscarJogador(guildId, jogador.discord_id);
+    const existente = await buscarPerfil(jogador.discord_id);
 
     if (existente) {
       jaExistiam += 1;
@@ -22,15 +20,14 @@ async function importar(url, guildId) {
       continue;
     }
 
-    await criarJogador({
-      guildId,
+    await criarPerfil({
       discordId: jogador.discord_id,
       nickPrincipal: jogador.nick_principal,
       levelGc: jogador.level_gc,
     });
 
     if (jogador.apelido_display && jogador.apelido_display !== jogador.nick_principal) {
-      await atualizarApelido(guildId, jogador.discord_id, jogador.apelido_display);
+      await atualizarApelido(jogador.discord_id, jogador.apelido_display, jogador.discord_id);
     }
 
     criados += 1;
@@ -47,14 +44,13 @@ async function importar(url, guildId) {
 
 if (require.main === module) {
   const url = process.argv[2];
-  const guildId = process.argv[3] || GUILD_ID_PADRAO;
 
   if (!url) {
-    console.error('Uso: node scripts/importar-do-kakazim.js <url-da-rota-de-exportacao> [guildId]');
+    console.error('Uso: node scripts/importar-do-kakazim.js <url-da-rota-de-exportacao>');
     process.exit(1);
   }
 
-  importar(url, guildId)
+  importar(url)
     .then(() => process.exit(0))
     .catch((erro) => {
       console.error('Erro na importação:', erro);

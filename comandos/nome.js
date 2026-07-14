@@ -1,5 +1,5 @@
 const {
-  buscarJogador,
+  buscarPerfil,
   atualizarApelido,
   adicionarApelidoAlternativo,
   buscarDonoDoApelido,
@@ -10,7 +10,7 @@ module.exports = {
   descricao: '!nome <novo_nick>',
   async executar(message, args) {
     const guildId = message.guild.id;
-    const jogador = await buscarJogador(guildId, message.author.id);
+    const jogador = await buscarPerfil(message.author.id);
     if (!jogador) {
       return message.reply('Você ainda não está registrado. Use `!play <nick> level:<numero>`.');
     }
@@ -22,7 +22,7 @@ module.exports = {
 
     const apelidoAnterior = jogador.apelido_display;
 
-    await atualizarApelido(guildId, message.author.id, novoApelido);
+    await atualizarApelido(message.author.id, novoApelido, message.author.id);
 
     if (apelidoAnterior && apelidoAnterior !== novoApelido) {
       const dono = await buscarDonoDoApelido(guildId, apelidoAnterior, message.author.id);

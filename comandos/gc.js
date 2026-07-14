@@ -1,4 +1,4 @@
-const { buscarJogador, atualizarLevel, buscarConfigServidor } = require('../banco/db');
+const { buscarPerfil, atualizarLevel, buscarConfigServidor } = require('../banco/db');
 const { ehAdmin } = require('../utils/permissoes');
 
 function nomeExibicao(jogador, fallback) {
@@ -20,7 +20,7 @@ module.exports = {
         return message.reply('Apenas administradores podem alterar o level de outro jogador.');
       }
 
-      const jogadorAlvo = await buscarJogador(guildId, mencao.id);
+      const jogadorAlvo = await buscarPerfil(mencao.id);
       if (!jogadorAlvo) {
         return message.reply('Esse jogador ainda não está registrado. Peça para ele usar `!play`.');
       }
@@ -31,14 +31,14 @@ module.exports = {
       }
 
       const novoLevel = Number.parseInt(argNumero, 10);
-      await atualizarLevel(guildId, mencao.id, novoLevel);
+      await atualizarLevel(mencao.id, novoLevel, message.author.id);
 
       const nome = nomeExibicao(jogadorAlvo, mencao.username);
       await message.channel.send(`🔼 **${nome}** atualizou o level para **${novoLevel}**`);
       return;
     }
 
-    const jogador = await buscarJogador(guildId, message.author.id);
+    const jogador = await buscarPerfil(message.author.id);
     if (!jogador) {
       return message.reply('Você ainda não está registrado. Use `!play <nick> level:<numero>`.');
     }
@@ -48,7 +48,7 @@ module.exports = {
     }
 
     const novoLevel = Number.parseInt(args[0], 10);
-    await atualizarLevel(guildId, message.author.id, novoLevel);
+    await atualizarLevel(message.author.id, novoLevel, message.author.id);
 
     const nome = nomeExibicao(jogador, message.author.username);
     await message.channel.send(`🔼 **${nome}** atualizou o level para **${novoLevel}**`);

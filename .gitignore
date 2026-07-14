@@ -1,5 +1,6 @@
 node_modules/
 .env
+migrations/backups/
 banco/*.db
 banco/*.db-shm
 banco/*.db-wal
