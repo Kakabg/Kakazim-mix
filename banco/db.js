@@ -209,6 +209,26 @@ async function listarTodosOsNicks(guildId) {
   return [...nicks];
 }
 
+/**
+ * Confere se o kakazim-bot está instalado no servidor (tabela kakazim_bot_servidores,
+ * mantida por ele no Postgres compartilhado). Se estiver, é ele quem cuida da
+ * configuração de mix agora (via !configurar → Mix), e o kakazim-mix deve ficar
+ * calado no próprio comando de configuração. A tabela não é criada por este bot -
+ * se ainda não existir (kakazim-bot nunca rodou nesse banco), trata como "não instalado".
+ */
+async function kakazimBotEstaInstalado(guildId) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM kakazim_bot_servidores WHERE guild_id = $1',
+      [guildId]
+    );
+    return rows.length > 0;
+  } catch (erro) {
+    if (erro?.code === '42P01') return false; // undefined_table
+    throw erro;
+  }
+}
+
 async function buscarConfigServidor(guildId) {
   const { rows } = await pool.query('SELECT * FROM config_servidor WHERE guild_id = $1', [guildId]);
   return rows[0];
@@ -277,6 +297,7 @@ module.exports = {
   buscarJogadorPorNick,
   buscarDonoDoApelido,
   listarTodosOsNicks,
+  kakazimBotEstaInstalado,
   buscarConfigServidor,
   buscarOuCriarConfigServidor,
   salvarCanaisTimes,

@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { comandos } = require('./comandos');
 const { iniciarBanco } = require('./banco/db');
 const { aoEntrarEmServidor } = require('./eventos/guildCreate');
+const { iniciarEscutaConfiguracao } = require('./eventos/escutaConfiguracao');
 
 const PREFIXO = '!';
 
@@ -19,6 +20,7 @@ const client = new Client({
 
 client.once('clientReady', () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
+  iniciarEscutaConfiguracao(client);
 });
 
 client.on('guildCreate', aoEntrarEmServidor);
