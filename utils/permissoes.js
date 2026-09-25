@@ -10,60 +10,32 @@ function ehAdmin(membro, guild, cargoAdminId) {
 }
 
 /**
- * `selecoes` é a lista (0 a 3 itens) marcada em config_servidor.quem_pode_iniciar_mix:
- * 'dono', 'admins' e/ou 'todos'. Basta atender UMA das opções marcadas.
+ * Cargo "Criador Mix" do servidor - o único que pode iniciar um !mix.
+ * Substitui config_servidor.quem_pode_iniciar_mix (dono/admins/todos), que
+ * não é mais consultado.
  */
-function podeIniciarMix(selecoes, membro, guild, cargoAdminId) {
-  if (!selecoes || selecoes.length === 0) return false;
-  if (selecoes.includes('todos')) return true;
-  if (selecoes.includes('dono') && membro.id === guild.ownerId) return true;
-  if (selecoes.includes('admins') && ehAdmin(membro, guild, cargoAdminId)) return true;
-  return false;
+const CARGO_CRIADOR_MIX_ID = '1552865947163955220';
+const NOME_CARGO_CRIADOR_MIX = 'Criador Mix';
+
+/**
+ * Posse EXATA do cargo: o membro precisa ter esse cargo atribuído. Não olha
+ * hierarquia/posição - cargos listados acima dele no servidor (e o próprio
+ * dono do servidor, se não tiver o cargo) não contam.
+ */
+function podeIniciarMix(membro) {
+  return membro?.roles?.cache?.has(CARGO_CRIADOR_MIX_ID) === true;
 }
 
 /**
- * Dono e admins sempre podem gerenciar qualquer mix em andamento (aprovar,
- * trocar times, juntar o povo de volta depois de separar em salas de voz).
- * `regraGerenciar` ('criador' ou 'todos') só decide se, ALÉM deles, mais
- * alguém também pode - quem criou aquela sessão específica de !mix já é
- * sempre liberado separadamente, na checagem de quem chamou o comando.
- * Note que separar em salas de voz NÃO passa por essa regra - ver
- * `podeInteragirComMix`.
+ * Qualquer botão de uma sessão de !mix em andamento (aprovar, sortear,
+ * trocar, cancelar, seleção na tela de troca, separar em salas de voz,
+ * juntar o povo) só pode ser clicado por quem digitou o !mix daquela sessão
+ * ou pelo dono real do servidor (guild.ownerId) - nenhum cargo, nem admin,
+ * libera além deles.
  */
-function podeGerenciarMix(regraGerenciar, membro, guild, cargoAdminId) {
-  if (ehAdmin(membro, guild, cargoAdminId)) return true;
-  return regraGerenciar === 'todos';
+function podeInteragirComMix({ usuarioId, autorId, guild }) {
+  if (!usuarioId) return false;
+  return usuarioId === autorId || usuarioId === guild?.ownerId;
 }
 
-const BOTOES_DE_GERENCIAMENTO = new Set(['mix_aprovar', 'mix_sortear', 'mix_cancelar', 'mix_juntar']);
-const BOTOES_DE_SEPARAR_EM_SALAS = new Set(['mix_voz_sim', 'mix_voz_nao']);
-
-function ehBotaoDeGerenciamento(customId) {
-  return BOTOES_DE_GERENCIAMENTO.has(customId) || customId.startsWith('mix_troca');
-}
-
-/**
- * Decide quem pode clicar em cada botão de uma sessão de !mix em andamento.
- *
- * Separar em salas de voz (mix_voz_sim/mix_voz_nao) fica sempre liberado pra
- * qualquer jogador que faz parte daquela sessão, sem depender de admin, dono
- * ou de quem criou o mix - o objetivo é que quem clicar primeiro resolve mais
- * rápido, já que é uma ação de baixo risco (só move gente de canal).
- *
- * Os demais botões restritos (aprovar, sortear, cancelar, trocar, juntar o
- * povo) seguem `podeGerenciarMix`, com quem criou a sessão sempre liberado
- * também. Botões não listados aqui (ex: seleção de jogador na tela de troca)
- * ficam liberados por padrão.
- */
-function podeInteragirComMix({ customId, usuarioId, autorId, idsDaSessao, membro, guild, config }) {
-  if (BOTOES_DE_SEPARAR_EM_SALAS.has(customId)) {
-    return idsDaSessao.has(usuarioId);
-  }
-
-  if (!ehBotaoDeGerenciamento(customId)) return true;
-  if (usuarioId === autorId) return true;
-
-  return podeGerenciarMix(config.quem_pode_gerenciar_mix, membro, guild, config.cargo_admin_id);
-}
-
-module.exports = { ehAdmin, podeIniciarMix, podeGerenciarMix, podeInteragirComMix };
+module.exports = { ehAdmin, podeIniciarMix, podeInteragirComMix, CARGO_CRIADOR_MIX_ID, NOME_CARGO_CRIADOR_MIX };

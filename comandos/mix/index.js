@@ -14,7 +14,7 @@ const {
   listarTodosOsNicks,
   buscarOuCriarConfigServidor,
 } = require('../../banco/db');
-const { podeIniciarMix, podeInteragirComMix } = require('../../utils/permissoes');
+const { podeIniciarMix, podeInteragirComMix, NOME_CARGO_CRIADOR_MIX } = require('../../utils/permissoes');
 const { montarTimesBalanceados, montarTimesComTravados, mediaLevel, embaralhar } = require('./montarTimes');
 
 const TAMANHO_TIME = Number.parseInt(process.env.TAMANHO_TIME, 10) || 5;
@@ -375,13 +375,13 @@ module.exports = {
     'Formato alternativo: !mix +a +b vs +c +d trava quem vem antes do "vs" no Time A e quem vem depois no Time B.',
   async executar(message, args) {
     const guildId = message.guild.id;
-    const config = await buscarOuCriarConfigServidor(guildId);
-
     const membroAutor = message.member ?? (await message.guild.members.fetch(message.author.id));
 
-    if (!podeIniciarMix(config.quem_pode_iniciar_mix, membroAutor, message.guild, config.cargo_admin_id)) {
-      return message.reply('🚫 Você não tem permissão para iniciar um `!mix` neste servidor.');
+    if (!podeIniciarMix(membroAutor)) {
+      return message.reply(`🚫 Só quem tem o cargo **${NOME_CARGO_CRIADOR_MIX}** pode iniciar um \`!mix\`.`);
     }
+
+    const config = await buscarOuCriarConfigServidor(guildId);
 
     const canalVoz = membroAutor.voice.channel;
 
@@ -540,16 +540,6 @@ module.exports = {
       contextoMontagem = { modoVs: false, pool: jogadoresRegistrados };
     }
 
-    // Todo mundo que faz parte da sessão (independente de time ou de trocas
-    // futuras entre A/B) - usado pra liberar o botão de separar em salas de
-    // voz pra qualquer um deles, sem depender de admin/criador.
-    const idsDaSessao = new Set(
-      (contextoMontagem.modoVs
-        ? [...contextoMontagem.travadosA, ...contextoMontagem.travadosB, ...contextoMontagem.livres]
-        : contextoMontagem.pool
-      ).map((j) => j.discord_id)
-    );
-
     function remontarTimes() {
       if (contextoMontagem.modoVs) {
         return montarTimesComTravados({
@@ -598,18 +588,14 @@ module.exports = {
 
     coletor.on('collect', async (interaction) => {
       const autorizado = podeInteragirComMix({
-        customId: interaction.customId,
         usuarioId: interaction.user.id,
         autorId: message.author.id,
-        idsDaSessao,
-        membro: interaction.member,
-        guild: interaction.guild,
-        config,
+        guild: message.guild,
       });
 
       if (!autorizado) {
         await interaction.reply({
-          content: '🚫 Você não tem permissão para interagir com este mix.',
+          content: `🚫 Só quem iniciou este mix (<@${message.author.id}>) ou o dono do servidor podem usar esses botões.`,
           flags: MessageFlags.Ephemeral,
         });
         return;
