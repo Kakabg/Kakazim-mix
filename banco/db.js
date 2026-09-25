@@ -272,19 +272,6 @@ async function salvarCargoAdmin(guildId, cargoAdminId) {
   return buscarConfigServidor(guildId);
 }
 
-async function salvarConfiguracaoServidor(guildId, { quemPodeIniciarMix, quemPodeGerenciarMix, cargoAdminId }) {
-  await pool.query(
-    `INSERT INTO config_servidor (guild_id, quem_pode_iniciar_mix, quem_pode_gerenciar_mix, cargo_admin_id)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (guild_id) DO UPDATE SET
-       quem_pode_iniciar_mix = excluded.quem_pode_iniciar_mix,
-       quem_pode_gerenciar_mix = excluded.quem_pode_gerenciar_mix,
-       cargo_admin_id = excluded.cargo_admin_id`,
-    [guildId, quemPodeIniciarMix, quemPodeGerenciarMix, cargoAdminId]
-  );
-  return buscarConfigServidor(guildId);
-}
-
 module.exports = {
   pool,
   iniciarBanco,
@@ -302,5 +289,4 @@ module.exports = {
   buscarOuCriarConfigServidor,
   salvarCanaisTimes,
   salvarCargoAdmin,
-  salvarConfiguracaoServidor,
 };
