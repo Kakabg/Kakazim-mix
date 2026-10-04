@@ -4,7 +4,6 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  ComponentType,
   MessageFlags,
 } = require('discord.js');
 const {
@@ -16,11 +15,24 @@ const {
 } = require('../../banco/db');
 const { podeIniciarMix, podeInteragirComMix, NOME_CARGO_CRIADOR_MIX } = require('../../utils/permissoes');
 const { montarTimesBalanceados, montarTimesComTravados, mediaLevel, embaralhar } = require('./montarTimes');
+const {
+  linhaBotoesPosMix,
+  linhaBotoesJogarNovamente,
+  linhaBotaoSepararSalas,
+  linhaBotoesAlterar,
+  linhasAdicionar,
+  vagasLivres,
+  adicionarAosTimes,
+  destinoOriginal,
+} = require('./posMix');
 
 const TAMANHO_TIME = Number.parseInt(process.env.TAMANHO_TIME, 10) || 5;
 const NIVEL_PADRAO_NOVATO = Number.parseInt(process.env.NIVEL_PADRAO_NOVATO, 10) || 10;
 
 const TEMPO_LIMITE_MS = 15 * 60 * 1000;
+// Depois do mix pronto os botões (Jogar novamente/Encerrar...) precisam
+// durar uma partida inteira e mais - cada clique renova esse prazo.
+const TEMPO_POS_MIX_MS = 4 * 60 * 60 * 1000;
 
 function nomeExibicao(jogador, fallback) {
   return jogador?.apelido_display || jogador?.nick_principal || fallback;
@@ -208,12 +220,6 @@ function linhaBotoesVoz() {
   );
 }
 
-function linhaBotaoJuntar() {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('mix_juntar').setLabel('🔙 Juntar o Povo').setStyle(ButtonStyle.Primary)
-  );
-}
-
 const MAX_JOGADORES_TROCA = 20;
 
 /**
@@ -345,6 +351,35 @@ async function resolverCanaisParaMover(guild, config) {
   return { canalTimeAId: novoCanalA.id, canalTimeBId: novoCanalB.id, temporarios: true, numero };
 }
 
+/**
+ * Salas da sessão pra "Separar salas": reaproveita o par já usado nesta
+ * sessão enquanto as duas salas existirem (senão, na 2ª partida, as salas
+ * principais estariam "ocupadas" pelos próprios jogadores e um par novo de
+ * temporárias seria criado à toa); sem par anterior, escolhe como sempre.
+ */
+async function resolverCanaisDaSessao(guild, config, canaisAnteriores) {
+  if (canaisAnteriores) {
+    const [a, b] = await Promise.all([
+      guild.channels.fetch(canaisAnteriores.canalTimeAId).catch(() => null),
+      guild.channels.fetch(canaisAnteriores.canalTimeBId).catch(() => null),
+    ]);
+    if (a && b) return canaisAnteriores;
+  }
+  return resolverCanaisParaMover(guild, config);
+}
+
+/** Ao expirar sem "Encerrar": apaga só as salas temporárias que já estão vazias (nunca tira ninguém de call). */
+async function excluirSalasTemporariasVazias(guild, idsTemporarios) {
+  for (const canalId of idsTemporarios) {
+    try {
+      const canal = await guild.channels.fetch(canalId).catch(() => null);
+      if (canal && contarMembrosReais(canal) === 0) await canal.delete();
+    } catch (erro) {
+      console.error(`Falha ao excluir sala de voz temporária ${canalId}:`, erro);
+    }
+  }
+}
+
 async function moverTimesParaVoz(guild, timeA, timeB, canais) {
   await moverJogadoresParaCanal(guild, timeA, canais.canalTimeAId);
   await moverJogadoresParaCanal(guild, timeB, canais.canalTimeBId);
@@ -355,9 +390,9 @@ async function moverTimesParaVoz(guild, timeA, timeB, canais) {
  * original - dá tempo de qualquer straggler ainda saindo da sala. Nunca mexe
  * nas salas principais configuradas do servidor, só nas criadas dinamicamente.
  */
-function agendarExclusaoCanaisTemporarios(guild, canalTimeAId, canalTimeBId) {
+function agendarExclusaoCanaisTemporarios(guild, idsTemporarios) {
   setTimeout(async () => {
-    for (const canalId of [canalTimeAId, canalTimeBId]) {
+    for (const canalId of idsTemporarios) {
       try {
         const canal = await guild.channels.fetch(canalId).catch(() => null);
         if (canal) await canal.delete();
@@ -552,6 +587,20 @@ module.exports = {
       return montarTimesBalanceados(embaralhar(contextoMontagem.pool));
     }
 
+    // Sala de voz de cada jogador no começo do mix - "Encerrar" devolve cada
+    // um pra ela. Quem estava na call do autor já se sabe; quem entrou por
+    // +nick/vs pode estar em outra sala (ou fora de call: fica sem registro e
+    // volta pra sala do autor, se estiver em call no fim).
+    const salaOriginalPorJogador = new Map();
+    for (const jogador of jogadoresRegistrados) {
+      if (membrosVoz.has(jogador.discord_id)) {
+        salaOriginalPorJogador.set(jogador.discord_id, canalVoz.id);
+        continue;
+      }
+      const membro = await message.guild.members.fetch(jogador.discord_id).catch(() => null);
+      if (membro?.voice?.channelId) salaOriginalPorJogador.set(jogador.discord_id, membro.voice.channelId);
+    }
+
     let timeAtual = remontarTimes();
 
     for (const registrado of registradosAutomaticamente) {
@@ -565,16 +614,60 @@ module.exports = {
     let selecionadosA = new Set();
     let selecionadosB = new Set();
     let canaisDaSessao = null;
+    const salasTemporariasDaSessao = new Set();
+    // Fluxo pós-mix (ver comandos/mix/posMix.js): null antes do mix pronto;
+    // 'pronto' (Jogar novamente/Encerrar), 'jogar' (Repetir/Alterar),
+    // 'separar' (só Separar salas), 'alterar' (Trocar/Adicionar[/Separar]),
+    // 'troca' e 'adicionar' (telas de seleção).
+    let fasePos = null;
+    let jaAlterou = false;
 
     const mensagem = await message.channel.send({
       embeds: [construirEmbedSorteio(timeAtual, 'Aguardando aprovação')],
       components: [linhaBotoesSorteio()],
     });
 
-    const coletor = mensagem.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: TEMPO_LIMITE_MS,
-    });
+    // Sem filtro de tipo: além de botões, o "Adicionar" usa um seletor de membros.
+    const coletor = mensagem.createMessageComponentCollector({ time: TEMPO_LIMITE_MS });
+
+    function menuAlterar() {
+      return [linhaBotoesAlterar({ podeAdicionar: vagasLivres(timeAtual, TAMANHO_TIME) > 0, comSepararSalas: jaAlterou })];
+    }
+
+    async function separarSalas() {
+      canaisDaSessao = await resolverCanaisDaSessao(message.guild, config, canaisDaSessao);
+      if (canaisDaSessao.temporarios) {
+        salasTemporariasDaSessao.add(canaisDaSessao.canalTimeAId);
+        salasTemporariasDaSessao.add(canaisDaSessao.canalTimeBId);
+      }
+      await moverTimesParaVoz(message.guild, timeAtual.timeA, timeAtual.timeB, canaisDaSessao);
+      return canaisDaSessao.temporarios
+        ? `✅ Times nas salas temporárias "Time A (${canaisDaSessao.numero})"/"Time B (${canaisDaSessao.numero})"`
+        : '✅ Times definidos - jogadores movidos para as salas de voz';
+    }
+
+    async function encerrar(interaction) {
+      coletor.stop('finalizado');
+      await interaction.deferUpdate();
+      const salaExiste = (id) => message.guild.channels.cache.has(id);
+      for (const jogador of [...timeAtual.timeA, ...timeAtual.timeB]) {
+        try {
+          const membro = await message.guild.members.fetch(jogador.discord_id);
+          if (!membro.voice.channelId) continue; // saiu da call - ignora
+          const destino = destinoOriginal(salaOriginalPorJogador, jogador.discord_id, canalVoz.id, salaExiste);
+          if (membro.voice.channelId !== destino) await membro.voice.setChannel(destino);
+        } catch {
+          // Jogador fora do servidor ou sem permissão para mover - ignora.
+        }
+      }
+      await mensagem.edit({
+        embeds: [construirEmbedSorteio(timeAtual, '🏁 Mix encerrado - todo mundo de volta pra sala de origem')],
+        components: [],
+      });
+      if (salasTemporariasDaSessao.size > 0) {
+        agendarExclusaoCanaisTemporarios(message.guild, [...salasTemporariasDaSessao]);
+      }
+    }
 
     async function avancarParaAprovado(interaction) {
       aprovado = true;
@@ -654,7 +747,7 @@ module.exports = {
       }
 
       if (interaction.customId.startsWith('mix_troca_jogador_')) {
-        if (!modoTroca) return interaction.deferUpdate();
+        if (!modoTroca && fasePos !== 'troca') return interaction.deferUpdate();
 
         const [, , , time, discordId] = interaction.customId.split('_');
         const selecionados = time === 'A' ? selecionadosA : selecionadosB;
@@ -672,6 +765,16 @@ module.exports = {
       }
 
       if (interaction.customId === 'mix_troca_cancelar') {
+        if (fasePos === 'troca') {
+          fasePos = 'alterar';
+          selecionadosA = new Set();
+          selecionadosB = new Set();
+          await interaction.update({
+            embeds: [construirEmbedSorteio(timeAtual, '✏️ Alterar players')],
+            components: menuAlterar(),
+          });
+          return;
+        }
         if (!modoTroca) return interaction.deferUpdate();
 
         modoTroca = false;
@@ -687,6 +790,19 @@ module.exports = {
 
       if (interaction.customId === 'mix_troca_confirmar') {
         const selecaoValida = selecionadosA.size === selecionadosB.size && selecionadosA.size > 0;
+        if (fasePos === 'troca') {
+          if (!selecaoValida) return interaction.deferUpdate();
+          timeAtual = trocarJogadores(timeAtual, selecionadosA, selecionadosB);
+          selecionadosA = new Set();
+          selecionadosB = new Set();
+          fasePos = 'alterar';
+          jaAlterou = true;
+          await interaction.update({
+            embeds: [construirEmbedSorteio(timeAtual, '✏️ Troca feita - altere mais ou separe as salas')],
+            components: menuAlterar(),
+          });
+          return;
+        }
         if (!modoTroca || !selecaoValida) return interaction.deferUpdate();
 
         timeAtual = trocarJogadores(timeAtual, selecionadosA, selecionadosB);
@@ -699,39 +815,159 @@ module.exports = {
       }
 
       if (interaction.customId === 'mix_voz_sim') {
+        if (!aprovado || fasePos !== null) return interaction.deferUpdate();
         await interaction.deferUpdate();
-        canaisDaSessao = await resolverCanaisParaMover(message.guild, config);
-        await moverTimesParaVoz(message.guild, timeAtual.timeA, timeAtual.timeB, canaisDaSessao);
-
-        const aviso = canaisDaSessao.temporarios
-          ? `✅ Times definidos - as salas principais estavam ocupadas, então movi todo mundo pras salas temporárias "Time A (${canaisDaSessao.numero})"/"Time B (${canaisDaSessao.numero})"`
-          : '✅ Times definidos - jogadores movidos para as salas de voz';
-        const embed = construirEmbedSorteio(timeAtual, aviso);
-        await mensagem.edit({ embeds: [embed], components: [linhaBotaoJuntar()] });
+        const aviso = await separarSalas();
+        fasePos = 'pronto';
+        coletor.resetTimer({ time: TEMPO_POS_MIX_MS });
+        await mensagem.edit({ embeds: [construirEmbedSorteio(timeAtual, aviso)], components: [linhaBotoesPosMix()] });
         return;
       }
 
       if (interaction.customId === 'mix_voz_nao') {
-        coletor.stop('finalizado');
-        const embed = construirEmbedSorteio(timeAtual, '✅ Times definidos');
-        await interaction.update({ embeds: [embed], components: [] });
+        if (!aprovado || fasePos !== null) return interaction.deferUpdate();
+        fasePos = 'pronto';
+        coletor.resetTimer({ time: TEMPO_POS_MIX_MS });
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, '✅ Times definidos')],
+          components: [linhaBotoesPosMix()],
+        });
         return;
       }
 
-      if (interaction.customId === 'mix_juntar') {
-        coletor.stop('finalizado');
-        await interaction.deferUpdate();
-        await moverJogadoresParaCanal(
-          message.guild,
-          [...timeAtual.timeA, ...timeAtual.timeB],
-          canalVoz.id
-        );
-        const embed = construirEmbedSorteio(timeAtual, '✅ Povo reunido de volta no canal original');
-        await mensagem.edit({ embeds: [embed], components: [] });
+      // --- Fluxo pós-mix (botões só aparecem depois do mix pronto) ---
+      if (fasePos !== null) coletor.resetTimer({ time: TEMPO_POS_MIX_MS });
 
-        if (canaisDaSessao?.temporarios) {
-          agendarExclusaoCanaisTemporarios(message.guild, canaisDaSessao.canalTimeAId, canaisDaSessao.canalTimeBId);
+      if (interaction.customId === 'mix_encerrar') {
+        if (fasePos !== 'pronto') return interaction.deferUpdate();
+        await encerrar(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'mix_jogar_novamente') {
+        if (fasePos !== 'pronto') return interaction.deferUpdate();
+        fasePos = 'jogar';
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, '🔁 Jogar novamente: repetir os times ou alterar players?')],
+          components: [linhaBotoesJogarNovamente()],
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_repetir_times') {
+        if (fasePos !== 'jogar') return interaction.deferUpdate();
+        fasePos = 'separar';
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, '♻️ Mesmos times - separe as salas quando estiverem prontos')],
+          components: [linhaBotaoSepararSalas()],
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_alterar_players') {
+        if (fasePos !== 'jogar') return interaction.deferUpdate();
+        fasePos = 'alterar';
+        jaAlterou = false;
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, '✏️ Alterar players')],
+          components: menuAlterar(),
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_pos_trocar') {
+        if (fasePos !== 'alterar') return interaction.deferUpdate();
+        if (timeAtual.timeA.length + timeAtual.timeB.length > MAX_JOGADORES_TROCA) {
+          await interaction.reply({
+            content: `🚫 Não é possível trocar jogadores: times grandes demais para exibir os botões (máximo ${MAX_JOGADORES_TROCA} jogadores no total).`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
         }
+        fasePos = 'troca';
+        selecionadosA = new Set();
+        selecionadosB = new Set();
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, 'Selecione os jogadores que vão trocar de time')],
+          components: construirBotoesTroca(timeAtual, selecionadosA, selecionadosB),
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_adicionar') {
+        const vagas = vagasLivres(timeAtual, TAMANHO_TIME);
+        if (fasePos !== 'alterar' || vagas === 0) return interaction.deferUpdate();
+        fasePos = 'adicionar';
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, `➕ Escolha quem entra no mix (${vagas} vaga(s))`)],
+          components: linhasAdicionar(vagas),
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_adicionar_cancelar') {
+        if (fasePos !== 'adicionar') return interaction.deferUpdate();
+        fasePos = 'alterar';
+        await interaction.update({
+          embeds: [construirEmbedSorteio(timeAtual, '✏️ Alterar players')],
+          components: menuAlterar(),
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_adicionar_selecao') {
+        if (fasePos !== 'adicionar' || !interaction.isUserSelectMenu()) return interaction.deferUpdate();
+        await interaction.deferUpdate();
+
+        const novos = [];
+        for (const usuario of interaction.users.values()) {
+          if (usuario.bot) continue;
+          const membro =
+            interaction.members?.get(usuario.id) ??
+            (await message.guild.members.fetch(usuario.id).catch(() => null));
+          const nomeDiscord = membro?.displayName ?? usuario.username;
+          let jogador = await buscarPerfil(usuario.id);
+          if (!jogador) {
+            jogador = await criarPerfil({ discordId: usuario.id, nickPrincipal: nomeDiscord, levelGc: NIVEL_PADRAO_NOVATO });
+            await message.channel.send(
+              `<@${usuario.id}> Você foi registrado automaticamente com level ${NIVEL_PADRAO_NOVATO} (provisório). Use \`!gc <numero>\` para atualizar seu level real.`
+            );
+          }
+          novos.push({ ...jogador, nome: nomeExibicao(jogador, nomeDiscord) });
+          // Sala de origem de quem entra agora = onde está neste momento.
+          const naVoz = await message.guild.members.fetch(usuario.id).catch(() => null);
+          if (naVoz?.voice?.channelId && !salaOriginalPorJogador.has(usuario.id)) {
+            salaOriginalPorJogador.set(usuario.id, naVoz.voice.channelId);
+          }
+        }
+
+        const resultado = adicionarAosTimes(timeAtual, novos, TAMANHO_TIME);
+        timeAtual = resultado.timeAtual;
+        if (resultado.adicionados.length > 0) jaAlterou = true;
+        fasePos = 'alterar';
+
+        const partes = [];
+        if (resultado.adicionados.length > 0) {
+          partes.push(`➕ ${resultado.adicionados.map((a) => `${a.jogador.nome} → Time ${a.time}`).join(', ')}`);
+        }
+        if (resultado.recusados.length > 0) {
+          partes.push(`sem vaga: ${resultado.recusados.map((j) => j.nome).join(', ')}`);
+        }
+        await mensagem.edit({
+          embeds: [construirEmbedSorteio(timeAtual, partes.join(' | ') || 'Ninguém novo adicionado')],
+          components: menuAlterar(),
+        });
+        return;
+      }
+
+      if (interaction.customId === 'mix_separar_salas') {
+        const pode = fasePos === 'separar' || (fasePos === 'alterar' && jaAlterou);
+        if (!pode) return interaction.deferUpdate();
+        await interaction.deferUpdate();
+        const aviso = await separarSalas();
+        fasePos = 'pronto';
+        jaAlterou = false;
+        await mensagem.edit({ embeds: [construirEmbedSorteio(timeAtual, aviso)], components: [linhaBotoesPosMix()] });
       }
     });
 
@@ -739,6 +975,11 @@ module.exports = {
       if (razao === 'cancelado' || razao === 'finalizado') return;
 
       await mensagem.edit({ components: [] }).catch(() => {});
+      // Expirou sem "Encerrar": não tira ninguém de call, só limpa as salas
+      // temporárias que já ficaram vazias.
+      if (salasTemporariasDaSessao.size > 0) {
+        await excluirSalasTemporariasVazias(message.guild, [...salasTemporariasDaSessao]);
+      }
     });
   },
 };

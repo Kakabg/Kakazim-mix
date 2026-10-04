@@ -28,8 +28,9 @@ function podeIniciarMix(membro) {
 
 /**
  * Qualquer botão de uma sessão de !mix em andamento (aprovar, sortear,
- * trocar, cancelar, seleção na tela de troca, separar em salas de voz,
- * juntar o povo) só pode ser clicado por quem digitou o !mix daquela sessão
+ * trocar, cancelar, seleção na tela de troca, separar em salas de voz e o
+ * fluxo pós-mix: jogar novamente, encerrar, repetir/alterar, adicionar) só
+ * pode ser clicado por quem digitou o !mix daquela sessão
  * ou pelo dono real do servidor (guild.ownerId) - nenhum cargo, nem admin,
  * libera além deles.
  */
